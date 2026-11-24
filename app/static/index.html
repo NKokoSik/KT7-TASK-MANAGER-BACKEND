@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Task Manager</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f9;color:#202638;font:16px Arial,sans-serif}
+main{max-width:920px;margin:40px auto;padding:0 18px}.panel{background:white;border-radius:14px;padding:22px;margin:16px 0;box-shadow:0 5px 22px #1a2b4b12}
+h1{margin:0 0 8px}input,textarea,select,button{font:inherit;padding:11px;border:1px solid #d8deea;border-radius:8px;margin:5px 4px 5px 0}
+input,textarea{min-width:220px}button{background:#315ee8;color:white;border:0;cursor:pointer}button.secondary{background:#e8edfb;color:#2447ad}
+.task{padding:12px;border:1px solid #e4e8f0;border-radius:9px;margin:8px 0;display:flex;justify-content:space-between;gap:12px}
+.small{color:#697386;font-size:14px}#app{display:none}.row{display:flex;flex-wrap:wrap;align-items:center}
+</style></head>
+<body><main>
+<div class="panel"><h1>Task Manager</h1><div class="small">Управление проектами и задачами</div></div>
+<section id="auth" class="panel"><h2>Вход</h2><div class="row"><input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Пароль"><button onclick="login()">Войти</button></div>
+<hr><h3>Регистрация</h3><div class="row"><input id="name" placeholder="Имя"><input id="regEmail" type="email" placeholder="Email"><input id="regPassword" type="password" placeholder="Пароль (от 8 символов)"><button onclick="register()">Создать аккаунт</button></div><p id="authMsg" class="small"></p></section>
+<section id="app" class="panel"><div class="row"><h2 style="flex:1">Мои проекты</h2><button class="secondary" onclick="logout()">Выйти</button></div>
+<div class="row"><input id="projectName" placeholder="Название проекта"><input id="projectDesc" placeholder="Описание"><button onclick="createProject()">Добавить проект</button></div>
+<div id="projects"></div><h2>Задачи проекта</h2><div id="taskForm" style="display:none"><div class="row"><input id="taskTitle" placeholder="Название задачи"><select id="taskStatus"><option value="todo">К выполнению</option><option value="in_progress">В работе</option><option value="done">Готово</option></select><button onclick="createTask()">Добавить задачу</button></div></div><div id="tasks"></div>
+<h3>Уведомления</h3><button class="secondary" onclick="loadNotifications()">Обновить</button><div id="notifications"></div></section>
+</main>
+<script>
+let token=localStorage.getItem('token'), selectedProject=null;
+const byId=(id)=>document.getElementById(id);
+const api=async(path,opts={})=>{
+  const headers={...(opts.headers||{}),...(token?{Authorization:'Bearer '+token}:{})};
+  if(opts.body && !(opts.body instanceof URLSearchParams) && !headers['Content-Type']) headers['Content-Type']='application/json';
+  const response=await fetch(path,{...opts,headers});
+  if(!response.ok){
+    const data=await response.json().catch(()=>({detail:response.statusText}));
+    const detail=data.detail;
+    let message=`Ошибка запроса (${response.status})`;
+    if(typeof detail==='string') message=detail;
+    else if(Array.isArray(detail)) message=detail.map(item=>{
+      const field=Array.isArray(item.loc)?item.loc.filter(part=>part!=='body').join('.') : '';
+      return `${field ? field+': ' : ''}${item.msg || 'Некорректные данные'}`;
+    }).join('; ');
+    else if(detail && typeof detail==='object') message=JSON.stringify(detail);
+    throw new Error(message);
+  }
+  return response.status===204?null:response.json();
+};
+function msg(text){byId('authMsg').textContent=text}
+async function register(){
+  try{
+    const fullName=byId('name').value.trim();
+    const userEmail=byId('regEmail').value.trim();
+    const userPassword=byId('regPassword').value;
+    if(!fullName || !userEmail || !userPassword){msg('Заполните имя, email и пароль.');return}
+    await api('/auth/register',{method:'POST',body:JSON.stringify({full_name:fullName,email:userEmail,password:userPassword})});
+    msg('Аккаунт создан. Теперь войдите.');
+    byId('email').value=userEmail;
+    byId('password').value=userPassword;
+  }catch(error){msg(error.message)}
+}
+async function login(){
+  try{
+    const form=new URLSearchParams();
+    form.set('username',byId('email').value.trim());
+    form.set('password',byId('password').value);
+    const data=await api('/auth/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:form});
+    token=data.access_token;
+    localStorage.setItem('token',token);
+    await showApp();
+  }catch(error){msg(error.message)}
+}
+function logout(){token=null;localStorage.removeItem('token');location.reload()}
+async function showApp(){byId('auth').style.display='none';byId('app').style.display='block';await loadProjects();await loadNotifications()}
+async function loadProjects(){let items=await api('/projects');byId('projects').innerHTML='';items.forEach(p=>{let b=document.createElement('button');b.className='secondary';b.textContent=p.name;b.onclick=()=>selectProject(p);byId('projects').appendChild(b)})}
+async function createProject(){try{await api('/projects',{method:'POST',body:JSON.stringify({name:projectName.value,description:projectDesc.value||null})});projectName.value='';projectDesc.value='';await loadProjects()}catch(e){alert(e.message)}}
+async function selectProject(p){selectedProject=p;taskForm.style.display='block';await loadTasks()}
+async function loadTasks(){let items=await api(`/projects/${selectedProject.id}/tasks`);byId('tasks').innerHTML='';items.forEach(t=>{let d=document.createElement('div');d.className='task';let s=document.createElement('span');s.textContent=t.title+' — '+t.status;let del=document.createElement('button');del.textContent='Удалить';del.onclick=async()=>{await api(`/projects/${selectedProject.id}/tasks/${t.id}`,{method:'DELETE'});loadTasks()};d.append(s,del);byId('tasks').appendChild(d)})}
+async function createTask(){try{await api(`/projects/${selectedProject.id}/tasks`,{method:'POST',body:JSON.stringify({title:taskTitle.value,status:taskStatus.value})});taskTitle.value='';await loadTasks();setTimeout(loadNotifications,1200)}catch(e){alert(e.message)}}
+async function loadNotifications(){try{let items=await api('/notifications');byId('notifications').innerHTML=items.map(n=>`<p>${n.message}${n.is_read?' (прочитано)':''}</p>`).join('')||'<p class="small">Пока нет уведомлений</p>'}catch(e){}}
+if(token)showApp().catch(()=>logout());
+</script></body></html>
